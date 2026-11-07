@@ -8,7 +8,7 @@ Verification, a support dashboard, private tickets, and automatic welcome messag
 | --- | --- |
 | Verification panel | `1503856051232182294` |
 | Dashboard with support menu | `1492006832779165756` |
-| Support tickets | `1492022428216328192` |
+| Support ticket category | `1568501776125009984` |
 | New-member welcome | `1492026750329163776` |
 
 The menu includes **General Support**, **Management Support**, and **Purchase Claim**. Each member can have one open ticket at a time. Closing a ticket keeps its history. A welcome message mentions the joining member, shows the member count at the time of joining, and links to the dashboard channel.

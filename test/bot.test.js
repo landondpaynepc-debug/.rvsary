@@ -16,7 +16,7 @@ const member = (id, roles = [], permissions = []) => ({ id, roles: { cache: new 
 test('defaults retain all four supplied destination IDs', () => {
   assert.equal(config.verificationChannelId, '1503856051232182294');
   assert.equal(config.dashboardChannelId, '1492006832779165756');
-  assert.equal(config.ticketDestinationId, '1492022428216328192');
+  assert.equal(config.ticketDestinationId, '1568501776125009984');
   assert.equal(config.welcomeChannelId, '1492026750329163776');
   const defaults = readConfig({ DISCORD_TOKEN: 'test-only' });
   assert.equal(defaults.supportRoleId, '1491987441702142074');

@@ -33,6 +33,6 @@ services:
       - key: DASHBOARD_CHANNEL_ID
         value: "1492006832779165756"
       - key: TICKET_DESTINATION_ID
-        value: "1492022428216328192"
+        value: "1568501776125009984"
       - key: WELCOME_CHANNEL_ID
         value: "1492026750329163776"

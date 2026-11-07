@@ -29,7 +29,7 @@ export function readConfig(env = process.env) {
     guildId: id('GUILD_ID'),
     verificationChannelId: id('VERIFICATION_CHANNEL_ID', '1503856051232182294'),
     dashboardChannelId: id('DASHBOARD_CHANNEL_ID', '1492006832779165756'),
-    ticketDestinationId: id('TICKET_DESTINATION_ID', '1492022428216328192'),
+    ticketDestinationId: id('TICKET_DESTINATION_ID', '1568501776125009984'),
     welcomeChannelId: id('WELCOME_CHANNEL_ID', '1492026750329163776'),
     supportRoleId: id('SUPPORT_ROLE_ID', '1491987441702142074'),
     managementRoleId: id('MANAGEMENT_ROLE_ID'),
