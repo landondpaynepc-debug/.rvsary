@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ChannelType, PermissionFlagsBits as P, PermissionsBitField, MessageFlags } from 'discord.js';
 import { readConfig } from '../src/config.js';
-import { panelPayload, welcomePayload } from '../src/panels.js';
+import { panelPayload, ticketPayload, welcomePayload } from '../src/panels.js';
 import { Store } from '../src/store.js';
 import { TicketService, canClose, privateOverwrites } from '../src/tickets.js';
 
@@ -79,11 +79,17 @@ test('state survives a restart and malformed state is not silently discarded', (
 function fixture(type = ChannelType.GuildCategory) {
   const store = { data: { tickets: {} }, save() {} };
   const calls = [];
+  const message = { id: '666666666666666666', author: { id: '555555555555555555' }, components: [],
+    edit: async payload => { calls.push(['messageEdit', payload]); message.components = payload.components; return message; },
+  };
   const channel = { id: '444444444444444444', isThread: () => type === ChannelType.GuildText,
-    send: async payload => { calls.push(['send', payload]); },
+    client: { user: message.author }, archived: false,
+    messages: { fetch: async query => typeof query === 'string' ? message : [message] },
+    send: async payload => { calls.push(['send', payload]); message.components = payload.components; return message; },
     delete: async () => { calls.push(['delete']); },
     members: { add: async id => { calls.push(['add', id]); } },
-    edit: async options => { calls.push(['edit', options]); },
+    edit: async options => { calls.push(['edit', options]); Object.assign(channel, options); },
+    setArchived: async value => { calls.push(['archive', value]); channel.archived = value; },
     permissionOverwrites: { edit: async (id, options) => { calls.push(['overwrite', id, options]); } },
   };
   const create = async options => { calls.push(['create', options]); return channel; };
@@ -97,7 +103,7 @@ function fixture(type = ChannelType.GuildCategory) {
     members: { fetchMe: async () => ({ id: '555555555555555555' }), fetch: async () => owner },
   };
   const interaction = { guild, guildId: guild.id, user: owner, channel, channelId: channel.id };
-  return { service: new TicketService(config, store), store, calls, channel, destination, interaction };
+  return { service: new TicketService(config, store), store, calls, channel, destination, interaction, message };
 }
 test('a category ticket is private and a second request reuses it', async () => {
   const f = fixture();
@@ -149,4 +155,130 @@ test('closing a private thread locks and archives it', async () => {
   const edit = f.calls.find(x => x[0] === 'edit')[1];
   assert.equal(edit.locked, true);
   assert.equal(edit.archived, true);
+  assert.equal(f.channel.archived, true);
+});
+
+function asStaff(f, id = '777777777777777777') {
+  const staff = member(id, [config.supportRoleId]);
+  f.interaction.user = staff;
+  f.interaction.guild.members.fetch = async () => staff;
+  return staff;
+}
+
+test('staff claim is saved and displayed without taking away owner close access', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  const owner = f.interaction.user;
+  const staff = asStaff(f);
+  const ticket = await f.service.claim(f.interaction);
+  assert.equal(ticket.claimedById, staff.id);
+  assert.ok(ticket.claimedAt);
+  assert.ok(canClose(owner, ticket));
+  const payload = f.message.components[0].toJSON();
+  assert.ok(JSON.stringify(payload).includes(`<@${staff.id}>`));
+  assert.equal(payload.components.at(-1).components[0].disabled, true);
+  const restarted = new TicketService(config, f.store);
+  await assert.rejects(restarted.claim(f.interaction), /already claimed/);
+});
+
+test('simultaneous staff claims never overwrite the first claim', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  const staff = asStaff(f);
+  const first = f.service.claim(f.interaction);
+  await assert.rejects(f.service.claim({ ...f.interaction, user: member('other', [config.supportRoleId]) }), /being updated/);
+  await first;
+  assert.equal(f.store.data.tickets[f.channel.id].claimedById, staff.id);
+});
+
+test('ticket owners and unrelated roles cannot claim or delete tickets', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  await assert.rejects(f.service.claim(f.interaction), /Only assigned staff/);
+  await f.service.close(f.interaction);
+  await assert.rejects(f.service.delete(f.interaction), /Only assigned staff/);
+  f.interaction.guild.members.fetch = async () => member('outsider', ['wrong-role']);
+  await assert.rejects(f.service.delete(f.interaction), /Only assigned staff/);
+  assert.equal(f.calls.some(x => x[0] === 'delete'), false);
+});
+
+test('closing changes public controls to Delete Ticket and prevents future claims', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  asStaff(f);
+  await assert.rejects(f.service.delete(f.interaction), /Close this ticket/);
+  await f.service.close(f.interaction);
+  const json = f.message.components[0].toJSON();
+  assert.deepEqual(json.components.at(-1).components.map(button => button.custom_id), ['rv:delete']);
+  await assert.rejects(f.service.claim(f.interaction), /Closed tickets/);
+  await assert.rejects(f.service.close(f.interaction), /already closed/);
+});
+
+test('staff deletion removes only the current closed channel and records who deleted it', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  await f.service.close(f.interaction);
+  const staff = asStaff(f);
+  const ticket = await f.service.delete(f.interaction);
+  assert.equal(f.calls.filter(x => x[0] === 'delete').length, 1);
+  assert.equal(ticket.deletedById, staff.id);
+  assert.ok(ticket.deletedAt);
+  await assert.rejects(f.service.delete(f.interaction), /not a tracked/);
+});
+
+test('failed channel deletion keeps the closed record available for retry', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  await f.service.close(f.interaction);
+  asStaff(f);
+  f.channel.delete = async () => { throw new Error('Missing Permissions'); };
+  await assert.rejects(f.service.delete(f.interaction), /Missing Permissions/);
+  assert.equal(f.store.data.tickets[f.channel.id].deletedAt, undefined);
+  f.channel.delete = async () => {};
+  await f.service.delete(f.interaction);
+  assert.ok(f.store.data.tickets[f.channel.id].deletedAt);
+});
+
+test('deletion rechecks staff role and guild even after earlier authorization', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  await f.service.close(f.interaction);
+  const staff = asStaff(f);
+  await f.service.authorize(f.interaction, true);
+  staff.roles.cache.clear();
+  await assert.rejects(f.service.delete(f.interaction), /Only assigned staff/);
+  asStaff(f);
+  await assert.rejects(f.service.delete({ ...f.interaction, guildId: 'wrong' }), /not a tracked/);
+  assert.equal(f.calls.some(x => x[0] === 'delete'), false);
+});
+
+test('administrator without staff role can claim and delete a closed ticket', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  const admin = member('admin', [], [P.Administrator]);
+  f.interaction.user = admin;
+  f.interaction.guild.members.fetch = async () => admin;
+  await f.service.claim(f.interaction);
+  await f.service.close(f.interaction);
+  await f.service.delete(f.interaction);
+  assert.equal(f.store.data.tickets[f.channel.id].deletedById, admin.id);
+});
+
+test('existing ticket controls upgrade on startup without another message', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  const ticket = f.store.data.tickets[f.channel.id];
+  delete ticket.controlMessageId;
+  delete ticket.controlsVersion;
+  ticket.closed = true;
+  await f.service.restoreControls(f.interaction.guild);
+  assert.equal(ticket.controlMessageId, f.message.id);
+  assert.equal(ticket.controlsVersion, 3);
+  assert.equal(f.calls.filter(x => x[0] === 'send').length, 1);
+  assert.equal(f.message.components[0].toJSON().components.at(-1).components[0].custom_id, 'rv:delete');
+});
+
+test('closed ticket payload never includes a claim or close action', () => {
+  const json = ticketPayload({ type: 'general', ownerId: 'owner', closed: true }).components[0].toJSON();
+  assert.deepEqual(json.components.at(-1).components.map(x => x.custom_id), ['rv:delete']);
 });

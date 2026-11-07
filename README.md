@@ -10,8 +10,12 @@ Verification, a support dashboard, private tickets, and automatic welcome messag
 | Dashboard with support menu | `1492006832779165756` |
 | Support ticket category | `1568501776125009984` |
 | New-member welcome | `1492026750329163776` |
+| Careers panel | `1492245276201582763` |
+| Application review | `1492019111142887434` |
+| Moderation logs | `1492018824441102517` |
+| Other event logs | `1492018836898054226` |
 
-The menu includes **General Support**, **Management Support**, and **Purchase Claim**. Each member can have one open ticket at a time. Closing a ticket keeps its history. A welcome message mentions the joining member, shows the member count at the time of joining, and links to the dashboard channel.
+The menu includes **General Support**, **Management Support**, and **Purchase Claim**. Each member can have one open ticket at a time. Staff can claim tickets, which displays the assigned staff member. Closing a ticket keeps its history and shows a **Delete Ticket** option for staff. Deleting requires a separate confirmation and permanently removes the channel and conversation. A welcome message mentions the joining member, shows the member count at the time of joining, and links to the dashboard channel.
 
 Staff role **`1491987441702142074`** is configured for all three support options. The server is detected from verification channel `1503856051232182294` when `GUILD_ID` is empty. If you set `GUILD_ID`, it must match that channel's server.
 
@@ -30,7 +34,7 @@ npm ci
 npm start
 ```
 
-8. In your Discord server, run **`/setup`** as a server administrator. It posts both panels. Run `/setup panel:Verification` or `/setup panel:Dashboard` to update one. Rerunning updates the saved messages instead of adding copies, provided the saved data is retained. Welcome messages start automatically when new members join; `/setup` does not post a sample welcome.
+8. In your Discord server, run **`/setup`** as a server administrator. It posts all three panels. Use the Verification, Dashboard or Careers choice to update one. The careers panel also publishes or refreshes on startup. Rerunning updates saved messages instead of adding copies when saved data is retained. Welcome messages start automatically when new members join; `/setup` does not post a sample welcome.
 
 The bot must keep running for buttons, support tickets and welcomes to work.
 
@@ -51,7 +55,55 @@ The bot detects the destination type automatically:
 
 Set `MANAGEMENT_ROLE_ID` to use a different staff role for Management Support; otherwise it uses `SUPPORT_ROLE_ID`. The role must be a real staff role, not `@everyone` or a managed integration role.
 
-The owner, assigned staff team, or an administrator can close a ticket after confirmation. Category tickets become read-only for the owner and assigned staff role; administrators can still write. Private threads are locked and archived; moderators with Manage Threads retain control. Closed records stay in `data/state.json`. Keep only **one running instance** of this bot and preserve that file across restarts.
+The owner, assigned staff team, or an administrator can close a ticket after confirmation. Only the assigned staff role or an administrator can claim or delete a ticket. Claiming records one staff member and survives restarts; other assigned staff can still close or delete the ticket. Open tickets cannot be deleted using the bot. Permissions are checked again when deletion is confirmed.
+
+Category tickets become read-only for the owner and assigned staff role; administrators can still write. Closed tickets show **Delete Ticket**, followed by **Delete Permanently** or **Keep Ticket**. Deletion removes the entire conversation; no transcript is exported. Private threads are locked and archived; moderators with Manage Threads retain control and may need to unarchive a thread to use its buttons. Ticket metadata stays in `data/state.json`, including claim, close and deletion details. Existing tracked tickets receive the new controls on startup. Keep only **one running instance** of this bot and preserve that file across restarts.
+
+## Moderation commands
+
+| Command | Use | Required moderator permission |
+| --- | --- | --- |
+| `/warn member reason` | Save a warning and try to DM the member | Moderate Members |
+| `/warnings member` | Show the latest 10 saved warnings | Moderate Members |
+| `/timeout member minutes reason` | Timeout from 1 minute to 28 days | Moderate Members |
+| `/untimeout member reason` | Remove a timeout | Moderate Members |
+| `/kick member reason` | Kick a member | Kick Members |
+| `/ban member reason` | Ban a member, keeping message history | Ban Members |
+| `/unban user-id reason` | Unban by Discord ID | Ban Members |
+| `/clear amount [user] [contains] [reason]` | Clear matching messages from the most recent 100 | Manage Messages |
+| `/say message [channel]` | Make the bot send text; mentions never ping | Manage Messages |
+| `/lock reason` | Deny @everyone Send Messages in this channel | Manage Channels |
+| `/unlock reason` | Restore the exact setting saved by `/lock` | Manage Channels |
+| `/slowmode seconds reason` | Set slowmode; 0 disables it | Manage Channels |
+
+Permissions are checked at runtime as well as when commands are displayed. Moderators cannot target themselves, the bot, the server owner, or members with equal/higher roles. The bot needs the corresponding permissions and an appropriately high role. `/clear` skips pinned messages and messages near or over Discord's 14-day bulk-delete limit. `/clear contains` needs Message Content access. `/say` checks both the moderator's and bot's access to the destination. Explicit channel role grants can bypass the @everyone lock; `/unlock` does not invent new permissions.
+
+## Careers and applications
+
+The careers panel offers **Support Staff**, **Management+**, and **Design Team**. `/apply team` also starts or resumes an application. The bot asks questions in DMs, one at a time, saves progress, then offers **Submit Application**. Applicants can type `resume` to repeat the current question or `cancel` to stop. Only one draft or pending application is allowed per applicant. Answers are limited to 800 characters; portfolio links may be included.
+
+Design Team's first question is a selection menu allowing any combination of GFX, VFX, and Discord Services. Each team then has questions about experience, relevant scenarios or portfolio, and availability. The questions are editable in `src/applications.js`.
+
+Submitted answers go to `1492019111142887434`. Members with reviewer role `1492001472416845987`, or administrators, may use **Accept with reason** or **Deny with reason**. Both open a required reason form. Self-review is blocked and permissions are checked again at submission. Acceptance assigns roles before recording a final acceptance. Failed grants undo roles added by that attempt. Interrupted approvals are recovered on restart. Claim/close/delete ticket controls are separate from application reviews.
+
+| Accepted team | Roles assigned |
+| --- | --- |
+| Support Staff | `1491987441702142074` + `1491994140819324988` |
+| Management+ | `1491987441702142074` + `1492001472416845987` |
+| Design Team | `1507979010053771354` + selected specialty roles |
+| GFX specialty | `1507984459839045762` |
+| VFX specialty | `1492013251700064307` |
+| Discord Services specialty | `1492013217692778616` |
+
+Keep the bot's highest role above all these roles and grant Manage Roles. Decision DMs contain accepted/denied and the reviewer's reason. Closed DMs cannot be forced open: the review message shows pending delivery and the bot retries hourly. Review messages disable decision buttons after completion. Only application metadata and review actions are copied to event logs; full answers stay in the application's DM flow, review channel, and persistent state. Restrict the review channel and persistent data to the appropriate team.
+
+## Logging
+
+Moderation commands, warnings, bans/unbans and relevant server audit entries go to `1492018824441102517`. Tickets, verification, application actions, member joins/leaves, role/nickname changes, channel/role/thread changes, message edits/deletes, voice moves/server mute changes, startup and bot action errors go to `1492018836898054226`. The bot also logs other audit entries Discord sends, with actor, target, reason and a bounded change summary. Give the bot **View Audit Log** to receive these entries and View Channel, Send Messages and Embed Links in both log channels.
+
+`ENABLE_MESSAGE_CONTENT=auto` (the default) checks the app's current access before connecting. Enable **Message Content Intent** in the Developer Portal and restart to include message text and use `/clear contains`. `false` opts out; `true` explicitly requests it and requires prior enablement. Application answers in DMs work without this privileged intent. Content excerpts in logs are capped at 400 characters. Bot logs are operational records, not complete transcripts: Discord cannot supply events while the bot is offline, uncached deleted content cannot be recovered, and inaccessible channels cannot be monitored. Log-channel message edits/deletes are excluded to avoid recursive logging.
+
+Failed log deliveries are saved to the persistent disk and retried every minute, with a 2,000-entry queue limit. Monitor Render logs for delivery failures or queue overflow. The bot does not copy every ordinary message, private DM outside an application, or reaction into logs.
 
 ## Separate Render service
 
@@ -72,13 +124,13 @@ If configuring a new Render service manually:
 
 ## Appearance
 
-The included blue banners are fresh vector recreations inspired by your screenshots, not the original artwork. PNGs are ready to use; SVG sources are included. To use your own original banners, replace `assets/verification.png` and `assets/dashboard.png`, or set the optional direct HTTPS banner URLs. Run `/setup` again after changing them. Discord's own theme, font and app badge determine the rest of the appearance.
+The verification panel uses your supplied original artwork, saved as `assets/verification.webp` so it does not depend on an expiring Discord attachment link. Tickets use your original `assets/support.png`. Careers use the matching generated `assets/careers.png`; its generation prompt is saved in `assets/careers-prompt.txt`. The dashboard uses the included blue recreation, `assets/dashboard.png`. Existing saved verification and ticket messages refresh on startup when needed. Discord's own theme, font and app badge determine the rest of the appearance.
 
 Panels use [Discord's Components V2 layout](https://discordjs.guide/legacy/popular-topics/display-components). Private-thread visibility follows [Discord's thread permissions](https://docs.discord.com/developers/topics/threads).
 
 ## Checks and troubleshooting
 
-Run `npm test` for local tests covering panel payloads, configuration, ticket privacy, duplicate requests, persistence, cleanup, close permissions, and welcome links. These use simulated Discord responses, not a live server.
+Run `npm test` for local tests covering panels, verification, ticket privacy, duplicate requests, claim/close/delete permissions, application questions and decisions, role assignment rollback, concurrent reviews, DM retry, moderation filters/hierarchy and durable logs. These use simulated Discord responses, not a live server.
 
 - **Disallowed intents / login closes:** enable Server Members Intent on the Bot page; large verified apps may need approval for that privileged intent.
 - **No `/setup`:** confirm `GUILD_ID`, the invitation scopes, and that the startup log says Connected. You need Administrator to use the command.

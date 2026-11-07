@@ -4,8 +4,9 @@ import { SUPPORT_TYPES, ticketPayload } from './panels.js';
 export class UserError extends Error {}
 export const roleFor = (type, config) => type === 'management'
   ? config.managementRoleId || config.supportRoleId : config.supportRoleId;
-export const canClose = (member, ticket) => member.id === ticket.ownerId
-  || member.permissions.has(P.Administrator) || member.roles.cache.has(ticket.staffRoleId);
+export const canManage = (member, ticket) => member.permissions.has(P.Administrator)
+  || member.roles.cache.has(ticket.staffRoleId);
+export const canClose = (member, ticket) => member.id === ticket.ownerId || canManage(member, ticket);
 
 export function privateOverwrites(guildId, botId, ownerId, staffRoleId) {
   const readWrite = [P.ViewChannel, P.SendMessages, P.ReadMessageHistory, P.AttachFiles, P.EmbedLinks];
@@ -94,7 +95,10 @@ export class TicketService {
       // Persist before sending controls so a restart cannot leave a working button untracked.
       this.store.data.tickets[channel.id] = ticket;
       this.store.save();
-      await channel.send(ticketPayload(ticket));
+      const controls = await channel.send(ticketPayload(ticket));
+      ticket.controlMessageId = controls.id;
+      ticket.controlsVersion = 3;
+      this.store.save();
       return { channel, existing: false };
     } catch (error) {
       if (channel) {
@@ -111,16 +115,87 @@ export class TicketService {
     }
   }
 
-  async close(interaction) {
+  async authorize(interaction, staffOnly = false) {
     const ticket = this.store.data.tickets[interaction.channelId];
-    if (!ticket || ticket.guildId !== interaction.guildId) throw new UserError('This is not a tracked .revisonary ticket.');
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    if (!canClose(member, ticket)) throw new UserError('Only the ticket owner or the assigned staff team can close this ticket.');
-    if (ticket.closed) throw new UserError('This ticket is already closed.');
-    const lock = `close:${ticket.channelId}`;
-    if (this.busy.has(lock)) throw new UserError('This ticket is already being closed.');
+    if (!ticket || ticket.guildId !== interaction.guildId || ticket.deletedAt) throw new UserError('This is not a tracked .revisonary ticket.');
+    // Recheck current membership for destructive actions, including stale confirmation buttons.
+    const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
+    if (!(staffOnly ? canManage(member, ticket) : canClose(member, ticket))) {
+      throw new UserError(staffOnly ? 'Only assigned staff or administrators can claim or delete tickets.'
+        : 'Only the ticket owner or the assigned staff team can close this ticket.');
+    }
+    return { ticket, member };
+  }
+
+  async mutate(interaction, staffOnly, action) {
+    const lock = `ticket:${interaction.channelId}`;
+    if (this.busy.has(lock)) throw new UserError('This ticket is being updated. Please try again in a moment.');
     this.busy.add(lock);
     try {
+      const { ticket, member } = await this.authorize(interaction, staffOnly);
+      return await action(ticket, member);
+    } finally { this.busy.delete(lock); }
+  }
+
+  async refreshControls(channel, ticket) {
+    let message;
+    if (ticket.controlMessageId) {
+      try { message = await channel.messages.fetch(ticket.controlMessageId); }
+      catch (error) { if (error.code !== 10008) throw error; }
+    } else {
+      // Find the controls in tickets created before message IDs were recorded.
+      const messages = await channel.messages.fetch({ limit: 100 });
+      message = messages.find(item => item.author.id === channel.client.user.id
+        && item.components.some(component => /"custom_id":"rv:(close|claim|delete)"/.test(JSON.stringify(component.toJSON()))));
+    }
+    const wasArchived = channel.isThread() && channel.archived;
+    if (wasArchived) await channel.setArchived(false);
+    try {
+      const payload = ticketPayload(ticket);
+      message = message ? await message.edit({ ...payload, attachments: [] }) : await channel.send(payload);
+      ticket.controlMessageId = message.id;
+      ticket.controlsVersion = 3;
+      this.store.save();
+    } finally {
+      if (wasArchived) await channel.setArchived(true);
+    }
+  }
+
+  async tryRefreshControls(channel, ticket) {
+    try { await this.refreshControls(channel, ticket); }
+    catch (error) { console.error('Ticket controls refresh failed:', ticket.channelId, error.message); }
+  }
+
+  async restoreControls(guild) {
+    for (const ticket of Object.values(this.store.data.tickets)) {
+      if (ticket.guildId !== guild.id || ticket.deletedAt || ticket.controlsVersion === 3) continue;
+      const lock = `ticket:${ticket.channelId}`;
+      if (this.busy.has(lock)) continue;
+      this.busy.add(lock);
+      try {
+        const channel = await guild.channels.fetch(ticket.channelId);
+        if (channel) await this.refreshControls(channel, ticket);
+      } catch (error) { console.error('Ticket upgrade failed:', ticket.channelId, error.message); }
+      finally { this.busy.delete(lock); }
+    }
+  }
+
+  async claim(interaction) {
+    return this.mutate(interaction, true, async (ticket, member) => {
+      if (ticket.closed) throw new UserError('Closed tickets cannot be claimed.');
+      if (ticket.claimedById) throw new UserError(`This ticket is already claimed by <@${ticket.claimedById}>.`);
+      ticket.claimedById = member.id;
+      ticket.claimedAt = new Date().toISOString();
+      ticket.controlsVersion = 0;
+      this.store.save();
+      await this.tryRefreshControls(interaction.channel, ticket);
+      return ticket;
+    });
+  }
+
+  async close(interaction) {
+    return this.mutate(interaction, false, async (ticket, member) => {
+      if (ticket.closed) throw new UserError('This ticket is already closed.');
       const channel = interaction.channel;
       if (channel.isThread()) {
         await channel.edit({ locked: true, archived: true, reason: `Ticket closed by ${member.id}` });
@@ -135,7 +210,22 @@ export class TicketService {
       }
       ticket.closed = true;
       ticket.closedAt = new Date().toISOString();
+      ticket.closedById = member.id;
+      ticket.controlsVersion = 0;
       this.store.save();
-    } finally { this.busy.delete(lock); }
+      await this.tryRefreshControls(channel, ticket);
+      return ticket;
+    });
+  }
+
+  async delete(interaction) {
+    return this.mutate(interaction, true, async (ticket, member) => {
+      if (!ticket.closed) throw new UserError('Close this ticket before deleting it.');
+      await interaction.channel.delete(`Closed ticket deleted by ${member.id}`);
+      ticket.deletedAt = new Date().toISOString();
+      ticket.deletedById = member.id;
+      this.store.save();
+      return ticket;
+    });
   }
 }

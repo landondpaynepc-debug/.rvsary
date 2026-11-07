@@ -10,6 +10,10 @@ export class Store {
       ? JSON.parse(fs.readFileSync(this.file, 'utf8'))
       : { panels: {}, tickets: {} };
     if (!this.data.panels || !this.data.tickets) throw new Error('Invalid state.json; restore a backup before starting.');
+    this.data.applications ??= {};
+    this.data.warnings ??= {};
+    this.data.channelLocks ??= {};
+    this.data.pendingLogs ??= [];
   }
   save() {
     const temp = `${this.file}.tmp`;

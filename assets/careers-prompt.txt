@@ -1,0 +1,5 @@
+Created with the built-in image-generation tool using Support.png as the reference.
+
+Initial prompt: Replace only the large central word SUPPORT with CAREERS, in the same large bold italic white type. Preserve the .revisonary white brand logo above, the tagline DESIGN THAT BUILDS BRANDS. below, the vivid textured blue background, luminous swooshes, and rounded thin border. Keep the very wide banner layout and all other visual elements as faithful as possible. No extra text or elements.
+
+Final refinement: Remove plain white strips at the top and bottom and extend the matching blue artwork flush to every edge. Preserve all text, logo, tagline, background and rounded border. Output only a full-bleed wide banner with no white margins.

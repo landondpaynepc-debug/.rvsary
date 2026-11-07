@@ -13,8 +13,8 @@ export const SUPPORT_TYPES = {
 const text = content => new TextDisplayBuilder().setContent(content);
 
 export function panelPayload(kind, config) {
-  const external = kind === 'verification' ? config.verificationBannerUrl : config.dashboardBannerUrl;
-  const name = `${kind}.png`;
+  const external = kind === 'verification' ? config.verificationBannerUrl : kind === 'dashboard' ? config.dashboardBannerUrl : '';
+  const name = kind === 'verification' ? 'verification.webp' : kind === 'careers' ? 'careers.png' : 'dashboard.png';
   const box = new ContainerBuilder().addMediaGalleryComponents(
     new MediaGalleryBuilder().addItems(item => item
       .setURL(external || `attachment://${name}`)
@@ -28,6 +28,19 @@ export function panelPayload(kind, config) {
       new SectionBuilder().addTextDisplayComponents(text('Verify using the button here:'))
         .setButtonAccessory(new ButtonBuilder().setCustomId('rv:verify')
           .setLabel('Verify').setStyle(ButtonStyle.Secondary)),
+    );
+  } else if (kind === 'careers') {
+    box.addTextDisplayComponents(text('### Careers at .revisonary'), text(
+      'Join our team! Choose **Support Staff**, **Management+**, or **Design Team** below. '
+      + 'The bot will send your questions privately in DMs. Design applicants can choose GFX, VFX, Discord Services, or multiple specialties.\n\n'
+      + 'Your answers go to our review team. You will receive the decision and reason by DM. Please enable DMs from this server.',
+    )).addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(
+      new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+        .setCustomId('rv:apply').setPlaceholder('Choose an application').addOptions(
+          { label: 'Support Staff', value: 'support', description: 'Help clients and handle support tickets.' },
+          { label: 'Management+', value: 'management', description: 'Lead the team and handle escalated concerns.' },
+          { label: 'Design Team', value: 'design', description: 'GFX, VFX, and Discord Services.' },
+        )),
     );
   } else {
     box.addTextDisplayComponents(text(
@@ -48,15 +61,26 @@ export function panelPayload(kind, config) {
 }
 
 export function ticketPayload(ticket) {
+  const controls = ticket.closed
+    ? [new ButtonBuilder().setCustomId('rv:delete').setLabel('Delete Ticket').setStyle(ButtonStyle.Danger)]
+    : [new ButtonBuilder().setCustomId('rv:claim').setLabel(ticket.claimedById ? 'Claimed' : 'Claim Ticket')
+      .setStyle(ButtonStyle.Primary).setDisabled(Boolean(ticket.claimedById)),
+    new ButtonBuilder().setCustomId('rv:close').setLabel('Close Ticket').setStyle(ButtonStyle.Secondary)];
+  const status = ticket.closed ? '**Status:** Closed — conversation saved. Staff can delete this ticket below.'
+    : '**Status:** Open';
+  const assigned = ticket.claimedById ? `**Claimed by:** <@${ticket.claimedById}>` : '**Claimed by:** Unclaimed';
   return {
     flags: MessageFlags.IsComponentsV2,
+    files: [new AttachmentBuilder(fileURLToPath(new URL('../assets/support.png', import.meta.url)), { name: 'support.png' })],
     allowedMentions: { parse: [] },
-    components: [new ContainerBuilder().addTextDisplayComponents(
+    components: [new ContainerBuilder().addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(item => item.setURL('attachment://support.png').setDescription('.revisonary Support')),
+    ).addTextDisplayComponents(
       text(`### ${SUPPORT_TYPES[ticket.type].label}`),
       text(`Welcome <@${ticket.ownerId}>. Please describe what you need help with. A member of our team will assist you here.\n\n**.revisonary** • Design that builds brands.`),
+      text(`${status}\n${assigned}`),
     ).addSeparatorComponents(new SeparatorBuilder()).addActionRowComponents(
-      new ActionRowBuilder().addComponents(new ButtonBuilder()
-        .setCustomId('rv:close').setLabel('Close Ticket').setStyle(ButtonStyle.Secondary)),
+      new ActionRowBuilder().addComponents(...controls),
     )],
   };
 }
