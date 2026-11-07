@@ -282,3 +282,14 @@ test('closed ticket payload never includes a claim or close action', () => {
   const json = ticketPayload({ type: 'general', ownerId: 'owner', closed: true }).components[0].toJSON();
   assert.deepEqual(json.components.at(-1).components.map(x => x.custom_id), ['rv:delete']);
 });
+
+test('startup retires tickets deleted outside the bot but preserves inaccessible records', async () => {
+  const f = fixture();
+  await f.service.open(f.interaction, 'general');
+  const ticket = f.store.data.tickets[f.channel.id];
+  delete ticket.controlsVersion;
+  f.interaction.guild.channels.fetch = async () => { const error = new Error('Unknown Channel'); error.code = 10003; throw error; };
+  await f.service.restoreControls(f.interaction.guild);
+  assert.equal(ticket.closed, true); assert.equal(ticket.deletedExternally, true); assert.ok(ticket.deletedAt);
+  assert.equal(f.calls.some(x => x[0] === 'delete'), false);
+});

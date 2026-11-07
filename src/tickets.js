@@ -175,7 +175,12 @@ export class TicketService {
       try {
         const channel = await guild.channels.fetch(ticket.channelId);
         if (channel) await this.refreshControls(channel, ticket);
-      } catch (error) { console.error('Ticket upgrade failed:', ticket.channelId, error.message); }
+        else { ticket.closed = true; ticket.deletedAt = new Date().toISOString(); ticket.deletedExternally = true; this.store.save(); }
+      } catch (error) {
+        if (error.code === 10003) {
+          ticket.closed = true; ticket.deletedAt = new Date().toISOString(); ticket.deletedExternally = true; this.store.save();
+        } else console.error('Ticket upgrade failed:', ticket.channelId, error.message);
+      }
       finally { this.busy.delete(lock); }
     }
   }
