@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="462" viewBox="0 0 1536 462">
+    <defs>
+      <linearGradient id="base" x2="1" y2="1"><stop stop-color="#174ea5"/><stop offset=".47" stop-color="#215ab7"/><stop offset="1" stop-color="#07286b"/></linearGradient>
+      <radialGradient id="light"><stop stop-color="#c1ddff" stop-opacity=".94"/><stop offset=".4" stop-color="#8fb8f5" stop-opacity=".48"/><stop offset="1" stop-color="#2f65bc" stop-opacity="0"/></radialGradient>
+      <linearGradient id="letter"><stop stop-color="#c0d5fa"/><stop offset=".45" stop-color="#ffffff"/><stop offset="1" stop-color="#c0d3f3"/></linearGradient>
+      <filter id="blur"><feGaussianBlur stdDeviation="25"/></filter>
+    </defs>
+    <rect width="1536" height="462" rx="28" fill="url(#base)"/>
+    <ellipse cx="768" cy="55" rx="700" ry="300" fill="url(#light)"/>
+    <ellipse cx="282" cy="400" rx="470" ry="260" fill="url(#light)" opacity=".5"/>
+    <path d="M-100 350 Q350 100 850 225 T1700 100" fill="none" stroke="#acd0ff" stroke-width="65" opacity=".18" filter="url(#blur)"/>
+    <path d="M-80 160 Q550 410 1100 330 T1630 390" fill="none" stroke="#b7d7ff" stroke-width="35" opacity=".22" filter="url(#blur)"/>
+    <rect x="38" y="24" width="1460" height="414" rx="53" fill="none" stroke="#c2dcff" stroke-opacity=".4" stroke-width="5"/>
+    <g transform="translate(594 62)">
+      <rect x="0" y="5" width="352" height="65" rx="33" fill="#6294e3" fill-opacity=".24" stroke="#f4f8ff" stroke-width="3"/>
+      <g fill="white" transform="translate(18 8)"><path d="M0 0L35 9L12 28Z"/><path d="M39 9L56 36L27 32Z"/><path d="M52 42L16 56L23 34Z"/><path d="M9 51L0 17L18 31Z"/></g>
+      <text x="79" y="50" font-family="Arial, sans-serif" font-size="43" font-weight="700" font-style="italic" letter-spacing="-2" fill="white">.revisonary</text>
+    </g>
+    <text x="768" y="298" text-anchor="middle" font-family="Arial, sans-serif" font-size="181" font-weight="900" font-style="italic" letter-spacing="-8" fill="url(#letter)">DASHBOARD</text>
+    <text x="768" y="351" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-style="italic" letter-spacing="-2" fill="white">DESIGN THAT BUILDS BRANDS.</text>
+    </svg>

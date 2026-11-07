@@ -1,0 +1,38 @@
+# Separate .revisonary service for the .rvsary repository.
+services:
+  - type: worker
+    name: revisonary-bot
+    runtime: node
+    region: ohio
+    plan: 0.5c-512mb
+    autoDeployTrigger: commit
+    buildCommand: npm ci
+    startCommand: npm start
+    numInstances: 1
+    disk:
+      name: revisonary-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 24.22.1
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GUILD_ID
+        value: ""
+      - key: SUPPORT_ROLE_ID
+        value: "1491987441702142074"
+      - key: UNVERIFIED_ROLE_ID
+        value: "1492018455359127643"
+      - key: VERIFIED_ROLE_ID
+        value: "1491987224835784754"
+      - key: DATA_DIR
+        value: /var/data
+      - key: VERIFICATION_CHANNEL_ID
+        value: "1503856051232182294"
+      - key: DASHBOARD_CHANNEL_ID
+        value: "1492006832779165756"
+      - key: TICKET_DESTINATION_ID
+        value: "1492022428216328192"
+      - key: WELCOME_CHANNEL_ID
+        value: "1492026750329163776"
