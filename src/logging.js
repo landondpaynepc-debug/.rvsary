@@ -28,7 +28,8 @@ export class Logger {
     try {
       while (this.store.data.pendingLogs.length) {
         const item = this.store.data.pendingLogs[0];
-        const id = item.kind === 'mod' ? this.config.modLogChannelId : this.config.eventLogChannelId;
+        const id = item.kind === 'application' ? this.config.applicationLogChannelId
+          : item.kind === 'mod' ? this.config.modLogChannelId : this.config.eventLogChannelId;
         const channel = await this.client.channels.fetch(id);
         if (!channel?.isTextBased() || channel.guildId !== this.config.guildId) throw new Error('Log channel is unavailable or in the wrong server.');
         const embed = new EmbedBuilder().setColor(item.kind === 'mod' ? 0xe6a23c : 0x528cff)
@@ -56,7 +57,7 @@ export function registerEventLogs(client, config, logger) {
   });
   const allowed = guild => guild?.id === config.guildId;
   const visibleMessage = message => message.guildId === config.guildId
-    && ![config.modLogChannelId, config.eventLogChannelId].includes(message.channelId);
+    && ![config.modLogChannelId, config.eventLogChannelId, config.applicationLogChannelId].includes(message.channelId);
   const content = message => config.messageContentEnabled ? clip(message?.content || '(content not cached)', 400)
     : '(message content logging is disabled)';
 
@@ -77,7 +78,7 @@ export function registerEventLogs(client, config, logger) {
     Channel: message.channelId, Message: message.id, Author: describe(message.author), Content: content(message),
   }));
   on(Events.MessageBulkDelete, (messages, channel) => channel.guildId === config.guildId
-    && ![config.modLogChannelId, config.eventLogChannelId].includes(channel.id)
+    && ![config.modLogChannelId, config.eventLogChannelId, config.applicationLogChannelId].includes(channel.id)
     && logger.log('event', 'Messages bulk deleted', { Channel: channel.id, Count: messages.size, 'Message IDs': [...messages.keys()].join(', ') }));
   on(Events.MessageUpdate, (before, after) => {
     if (!visibleMessage(after) || before.editedTimestamp === after.editedTimestamp) return;

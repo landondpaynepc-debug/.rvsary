@@ -238,7 +238,9 @@ client.on(Events.InteractionCreate, async interaction => {
     }
   } catch (error) {
     console.error('Interaction failed:', error.name, error.code ?? '', error.message);
-    try { await logger.log(interaction.isChatInputCommand() && Object.hasOwn(MOD_PERMISSIONS, interaction.commandName) ? 'mod' : 'event', 'Bot action failed', {
+    const logKind = interaction.commandName === 'apply' || interaction.customId?.startsWith('rv:app') ? 'application'
+      : interaction.isChatInputCommand() && Object.hasOwn(MOD_PERMISSIONS, interaction.commandName) ? 'mod' : 'event';
+    try { await logger.log(logKind, 'Bot action failed', {
       Member: interaction.user.id, Action: interaction.commandName || interaction.customId, Error: error.message,
     }); } catch (logError) { console.error('Could not save failure log:', logError.message); }
     const content = error instanceof UserError ? error.message

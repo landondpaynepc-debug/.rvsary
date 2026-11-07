@@ -17,7 +17,7 @@ function fixture(track = 'support') {
     remove: async id => { removals.push(id); member.roles.cache.delete(id); },
   } };
   const review = { id: '444444444444444444', edit: async payload => { review.payload = payload; return review; } };
-  const channel = { guildId: config.guildId, isTextBased: () => true,
+  const channel = { id: config.applicationReviewChannelId, guildId: config.guildId, isTextBased: () => true,
     send: async payload => { review.payload = payload; return review; }, messages: { fetch: async () => review } };
   const guild = { id: config.guildId, members: { fetch: async input => (typeof input === 'string' ? input : input.user) === user.id ? member : reviewer,
     fetchMe: async () => ({ permissions: new PermissionsBitField([P.ManageRoles]) }) },
@@ -240,4 +240,28 @@ test('duplicate DM gateway delivery never advances the application twice', async
   const message = { guildId: null, author: f.user, id: 'same-id', content: 'My first answer', reply: async () => {} };
   await f.service.onMessage(message); await f.service.onMessage(message);
   assert.equal(f.app.answers.length, 1);
+});
+
+test('existing application reviews keep their old channel and reviewer buttons after migration', async () => {
+  const f = fixture();
+  const restarted = new ApplicationService(f.client, config, f.store, f.logger);
+  assert.equal(f.app.reviewChannelId, '1492019111142887434');
+  await assert.rejects(restarted.decide(f.interaction, f.app, 'deny', 'Reason'), /original application review/);
+  await restarted.decide({ ...f.interaction, channelId: f.app.reviewChannelId }, f.app, 'deny', 'Reason');
+  assert.equal(f.app.status, 'denied');
+  assert.equal(f.logs.find(entry => entry[1] === 'Application reviewed')[0], 'application');
+});
+
+test('new submissions and application activity logs route to the requested channel', async () => {
+  const f = fixture(); f.app.status = 'ready';
+  await f.service.submit(f.user, f.app);
+  assert.equal(f.app.reviewChannelId, '1492019040082985110');
+  const destinations = [];
+  const logger = new Logger({ channels: { fetch: async id => {
+    destinations.push(id);
+    return { guildId: config.guildId, isTextBased: () => true, send: async () => {} };
+  } } }, config, { data: { pendingLogs: [] }, save() {} });
+  await logger.log('application', 'Application submitted', { Applicant: f.user.id });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(destinations, ['1492019040082985110']);
 });

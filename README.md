@@ -11,7 +11,7 @@ Verification, a support dashboard, private tickets, and automatic welcome messag
 | Support ticket category | `1568501776125009984` |
 | New-member welcome | `1492026750329163776` |
 | Careers panel | `1492245276201582763` |
-| Application review | `1492019111142887434` |
+| Application review and activity logs | `1492019040082985110` |
 | Moderation logs | `1492018824441102517` |
 | Other event logs | `1492018836898054226` |
 
@@ -84,7 +84,7 @@ The careers panel offers **Support Staff**, **Management+**, and **Design Team**
 
 Design Team's first question is a selection menu allowing any combination of GFX, VFX, and Discord Services. Each team then has questions about experience, relevant scenarios or portfolio, and availability. The questions are editable in `src/applications.js`.
 
-Submitted answers go to `1492019111142887434`. Members with reviewer role `1492001472416845987`, or administrators, may use **Accept with reason** or **Deny with reason**. Both open a required reason form. Self-review is blocked and permissions are checked again at submission. Acceptance assigns roles before recording a final acceptance. Failed grants undo roles added by that attempt. Interrupted approvals are recovered on restart. Claim/close/delete ticket controls are separate from application reviews.
+Submitted answers go to `1492019040082985110`. Members with reviewer role `1492001472416845987`, or administrators, may use **Accept with reason** or **Deny with reason**. Both open a required reason form. Self-review is blocked and permissions are checked again at submission. Acceptance assigns roles before recording a final acceptance. Failed grants undo roles added by that attempt. Interrupted approvals are recovered on restart. Applications already posted in `1492019111142887434` retain their original review messages and working buttons; each application saves its review channel. Claim/close/delete ticket controls are separate from application reviews.
 
 | Accepted team | Roles assigned |
 | --- | --- |
@@ -95,11 +95,11 @@ Submitted answers go to `1492019111142887434`. Members with reviewer role `14920
 | VFX specialty | `1492013251700064307` |
 | Discord Services specialty | `1492013217692778616` |
 
-Keep the bot's highest role above all these roles and grant Manage Roles. Decision DMs contain accepted/denied and the reviewer's reason. Closed DMs cannot be forced open: the review message shows pending delivery and the bot retries hourly. Review messages disable decision buttons after completion. Only application metadata and review actions are copied to event logs; full answers stay in the application's DM flow, review channel, and persistent state. Restrict the review channel and persistent data to the appropriate team.
+Keep the bot's highest role above all these roles and grant Manage Roles. Decision DMs contain accepted/denied and the reviewer's reason. Closed DMs cannot be forced open: the review message shows pending delivery and the bot retries hourly. Review messages disable decision buttons after completion. Application activity logs accompany the submitted applications in `1492019040082985110`. Restrict the review channel and persistent data to the appropriate team.
 
 ## Logging
 
-Moderation commands, warnings, bans/unbans and relevant server audit entries go to `1492018824441102517`. Tickets, verification, application actions, member joins/leaves, role/nickname changes, channel/role/thread changes, message edits/deletes, voice moves/server mute changes, startup and bot action errors go to `1492018836898054226`. The bot also logs other audit entries Discord sends, with actor, target, reason and a bounded change summary. Give the bot **View Audit Log** to receive these entries and View Channel, Send Messages and Embed Links in both log channels.
+Moderation commands, warnings, bans/unbans and relevant server audit entries go to `1492018824441102517`. Application starts, submissions, cancellations, decisions, recovery and action errors go to `1492019040082985110`, alongside the submitted applications with Accept/Deny buttons. Tickets, verification, member joins/leaves, role/nickname changes, channel/role/thread changes, message edits/deletes, voice moves/server mute changes, startup and other bot action errors go to `1492018836898054226`. The bot also logs other audit entries Discord sends, with actor, target, reason and a bounded change summary. Give the bot **View Audit Log** to receive these entries and View Channel, Send Messages and Embed Links in all log channels.
 
 `ENABLE_MESSAGE_CONTENT=auto` (the default) checks the app's current access before connecting. Enable **Message Content Intent** in the Developer Portal and restart to include message text and use `/clear contains`. `false` opts out; `true` explicitly requests it and requires prior enablement. Application answers in DMs work without this privileged intent. Content excerpts in logs are capped at 400 characters. Bot logs are operational records, not complete transcripts: Discord cannot supply events while the bot is offline, uncached deleted content cannot be recovered, and inaccessible channels cannot be monitored. Log-channel message edits/deletes are excluded to avoid recursive logging.
 

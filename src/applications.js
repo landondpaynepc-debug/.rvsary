@@ -62,8 +62,17 @@ export class ApplicationService {
     Object.assign(this, { client, config, store, logger });
     this.busy = new Set();
     store.data.applications ??= {};
+    // Preserve existing review links when the destination changes.
+    let migrated = false;
+    for (const app of Object.values(store.data.applications)) if (!app.reviewChannelId) {
+      app.reviewChannelId = app.reviewMessageId || app.status === 'submitting'
+        ? config.legacyApplicationReviewChannelId : config.applicationReviewChannelId;
+      migrated = true;
+    }
+    if (migrated) store.save();
     // Interrupted role changes are rolled back by recover() before review is reopened.
   }
+  reviewChannelId(app) { return app.reviewChannelId || this.config.applicationReviewChannelId; }
   async locked(key, fn) {
     if (this.busy.has(key)) throw new UserError('Your previous application action is still processing. Please try again in a moment.');
     this.busy.add(key);
@@ -83,7 +92,7 @@ export class ApplicationService {
           status: 'draft', answers: [], specialties: [], createdAt: new Date().toISOString() };
         this.store.data.applications[app.id] = app;
         this.store.save();
-        await this.logger.log('event', 'Application started', { Applicant: user.id, Team: TRACKS[track], Application: app.id });
+        await this.logger.log('application', 'Application started', { Applicant: user.id, Team: TRACKS[track], Application: app.id });
       }
       try {
         await user.send({ content: `**.revisonary — ${TRACKS[app.track]} application**\nReply to each question here, up to 800 characters per answer. Your answers are saved and sent to the review team when you submit. Do not include passwords or private personal information. Type **cancel** to stop or **resume** to repeat the current question.`, allowedMentions: { parse: [] } });
@@ -116,7 +125,7 @@ export class ApplicationService {
         const answer = message.content?.trim();
         if (answer?.toLowerCase() === 'cancel') {
           app.status = 'cancelled'; this.store.save();
-          await this.logger.log('event', 'Application cancelled', { Applicant: app.userId, Application: app.id });
+          await this.logger.log('application', 'Application cancelled', { Applicant: app.userId, Application: app.id });
           await message.reply('Your application was cancelled. You can start a new one from the careers panel.'); return;
         }
         if (answer?.toLowerCase() === 'resume' || app.status === 'ready') { await this.prompt(message.author, app); return; }
@@ -134,7 +143,7 @@ export class ApplicationService {
     }
   }
   async reviewer(interaction, app) {
-    if (!app || interaction.guildId !== app.guildId || interaction.channelId !== this.config.applicationReviewChannelId) throw new UserError('Use the original application review message.');
+    if (!app || interaction.guildId !== app.guildId || interaction.channelId !== this.reviewChannelId(app)) throw new UserError('Use the original application review message.');
     const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
     if (!canReview(member, this.config) || member.id === app.userId) throw new UserError('Only the review team or an administrator can review another member’s application.');
     return member;
@@ -145,6 +154,7 @@ export class ApplicationService {
     await guild.members.fetch({ user: app.userId, force: true });
     const channel = await guild.channels.fetch(this.config.applicationReviewChannelId);
     if (!channel?.isTextBased()) throw new UserError('The review channel is unavailable. Your answers are still saved.');
+    app.reviewChannelId = channel.id;
     app.status = 'submitting'; this.store.save();
     try {
       const sent = await channel.send({ ...reviewPayload(app), nonce: app.id, enforceNonce: true });
@@ -154,7 +164,7 @@ export class ApplicationService {
       if (!app.reviewMessageId) app.status = 'ready';
       this.store.save(); throw error;
     }
-    await this.logger.log('event', 'Application submitted', { Applicant: user.id, Team: TRACKS[app.track], Application: app.id });
+    await this.logger.log('application', 'Application submitted', { Applicant: user.id, Team: TRACKS[app.track], Application: app.id });
   }
   async decide(interaction, app, decision, reason) {
     return this.locked(`review:${app?.id}`, async () => {
@@ -184,7 +194,7 @@ export class ApplicationService {
         let rollbackFailed = false;
         for (const id of added.reverse()) {
           try { await member.roles.remove(id, 'Application approval failed; undo partial grant'); }
-          catch (rollbackError) { rollbackFailed = true; await this.logger.log('mod', 'Application role rollback failed', { Applicant: app.userId, Role: id, Error: rollbackError.message }); }
+          catch (rollbackError) { rollbackFailed = true; await this.logger.log('application', 'Application role rollback failed', { Applicant: app.userId, Role: id, Error: rollbackError.message }); }
         }
         app.status = rollbackFailed ? 'deciding' : 'pending';
         if (!rollbackFailed) delete app.provisionalRoleIds;
@@ -194,7 +204,7 @@ export class ApplicationService {
       app.status = decision === 'accept' ? 'accepted' : 'denied';
       app.reason = reason.trim(); app.reviewerId = interaction.user.id; app.decidedAt = new Date().toISOString();
       app.notificationStatus = 'pending'; app.reviewNeedsUpdate = true; this.store.save();
-      await this.logger.log('event', 'Application reviewed', { Applicant: app.userId, Team: TRACKS[app.track], Decision: app.status, Reviewer: app.reviewerId, Reason: app.reason });
+      await this.logger.log('application', 'Application reviewed', { Applicant: app.userId, Team: TRACKS[app.track], Decision: app.status, Reviewer: app.reviewerId, Reason: app.reason });
       await this.notify(app);
       await this.updateReview(app);
       return `Application ${app.status}.${app.notificationStatus === 'sent' ? ' Decision DM delivered.' : ' Their DMs are closed or unavailable; delivery will be retried.'}`;
@@ -223,7 +233,7 @@ export class ApplicationService {
   async updateReview(app) {
     if (!app.reviewNeedsUpdate || !app.reviewMessageId) return;
     try {
-      const channel = await this.client.channels.fetch(this.config.applicationReviewChannelId);
+      const channel = await this.client.channels.fetch(this.reviewChannelId(app));
       const message = await channel.messages.fetch(app.reviewMessageId);
       await message.edit(reviewPayload(app)); app.reviewNeedsUpdate = false; this.store.save();
     } catch (error) { console.error('Application review display update deferred:', app.id, error.message); }
@@ -244,12 +254,12 @@ export class ApplicationService {
             await member.roles.remove(id, 'Recovering interrupted application approval');
           }
           delete app.provisionalRoleIds; app.status = 'pending'; app.reviewNeedsUpdate = true; this.store.save();
-          await this.logger.log('event', 'Interrupted application review recovered', { Application: app.id, Applicant: app.userId });
+          await this.logger.log('application', 'Interrupted application review recovered', { Application: app.id, Applicant: app.userId });
         } catch (error) { console.error('Application role recovery deferred:', app.id, error.message); }
       }
       if (app.status === 'submitting') {
         try {
-          const channel = await this.client.channels.fetch(this.config.applicationReviewChannelId);
+          const channel = await this.client.channels.fetch(this.reviewChannelId(app));
           const messages = await channel.messages.fetch({ limit: 100 });
           const found = messages.find(m => m.author.id === this.client.user.id && m.embeds.some(e => e.footer?.text === `Application ${app.id}`));
           if (found) { app.reviewMessageId = found.id; app.status = 'pending'; app.reviewNeedsUpdate = true; }
@@ -274,7 +284,7 @@ export class ApplicationService {
     const app = this.store.data.applications[id];
     if (!app) throw new UserError('This application could not be found.');
     if (['accept', 'deny'].includes(action)) {
-      if (interaction.guildId !== app.guildId || interaction.channelId !== this.config.applicationReviewChannelId
+      if (interaction.guildId !== app.guildId || interaction.channelId !== this.reviewChannelId(app)
         || interaction.message.id !== app.reviewMessageId || app.status !== 'pending') throw new UserError('Use the pending application’s original review message.');
       // Modal responses cannot be deferred. Revalidate membership before the submitted decision is applied.
       const roles = interaction.member.roles.cache;
@@ -302,7 +312,7 @@ export class ApplicationService {
       } else if (action === 'cancel') {
         if (!['draft', 'ready'].includes(app.status)) throw new UserError('This application was already submitted or closed.');
         app.status = 'cancelled'; this.store.save(); await interaction.editReply('Application cancelled.');
-        await this.logger.log('event', 'Application cancelled', { Applicant: app.userId, Application: app.id });
+        await this.logger.log('application', 'Application cancelled', { Applicant: app.userId, Application: app.id });
       } else throw new UserError('Unknown application action.');
     });
     return true;
