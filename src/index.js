@@ -30,7 +30,7 @@ const logger = new Logger(client, config, store);
 const moderation = new ModerationService(config, store, logger);
 const applications = new ApplicationService(client, config, store, logger);
 registerEventLogs(client, config, logger);
-client.on(Events.MessageCreate, message => void applications.onMessage(message));
+client.on(Events.MessageCreate, message => { if (ready) void applications.onMessage(message); });
 let applicationTimer;
 let publishing = false;
 let ready = false;
@@ -79,6 +79,9 @@ client.once(Events.ClientReady, async () => {
     if (config.guildId && config.guildId !== verificationChannel.guildId) throw new Error('GUILD_ID does not match the verification channel server.');
     config.guildId = verificationChannel.guildId;
     const guild = await client.guilds.fetch(config.guildId);
+    // Explicit user-requested reset; the persistent marker makes this run once only.
+    const applicationReset = await applications.resetAllOnce('2026-11-07-request-1');
+    console.log(`Application reset status: ${JSON.stringify(applicationReset)}`);
     // Upsert our commands without removing any unrelated application commands.
     for (const command of [setup, applicationCommand(), ...moderationCommands()]) await guild.commands.create(command.toJSON());
     ready = true;
@@ -132,6 +135,7 @@ client.on(Events.InteractionCreate, async interaction => {
     || ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) && interaction.customId.startsWith('rv:'));
   if (!ours) return;
   try {
+    if (!ready) throw new UserError('The bot is starting up. Please try again in a moment.');
     if (await applications.handle(interaction)) return;
     if (!interaction.inGuild() || interaction.guildId !== config.guildId) {
       throw new UserError('This bot is configured for a different server.');

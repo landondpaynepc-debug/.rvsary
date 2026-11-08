@@ -265,3 +265,32 @@ test('new submissions and application activity logs route to the requested chann
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(destinations, ['1492019040082985110']);
 });
+
+test('application reset clears saved applications and review messages once, keeping roles and new applications', async () => {
+  const f = fixture(); let deleted = 0;
+  f.review.author = f.client.user;
+  f.review.embeds = [{ footer: { text: `Application ${f.app.id}` } }];
+  f.review.delete = async () => { deleted++; };
+  f.store.data.applications.draft = { id: 'draft', guildId: config.guildId, userId: 'draft-user', status: 'draft', answers: ['old answer'] };
+  const result = await f.service.resetAllOnce('test-reset');
+  assert.deepEqual(result, { cleared: 2, deletedReviews: 1, cleanupPending: 0 });
+  assert.deepEqual(f.store.data.applications, {});
+  assert.deepEqual(f.grants, []); assert.deepEqual(f.removals, []);
+  f.store.data.applications.new = { id: 'new', guildId: config.guildId, status: 'draft' };
+  await f.service.resetAllOnce('test-reset');
+  assert.ok(f.store.data.applications.new); assert.equal(deleted, 1);
+});
+
+test('application reset retries failed review cleanup without resetting later applications', async () => {
+  const f = fixture();
+  f.review.author = f.client.user;
+  f.review.embeds = [{ footer: { text: `Application ${f.app.id}` } }];
+  f.review.delete = async () => { throw new Error('Missing Permissions'); };
+  const first = await f.service.resetAllOnce('test-reset');
+  assert.equal(first.cleanupPending, 1); assert.deepEqual(f.store.data.applications, {});
+  let deleted = false; f.review.delete = async () => { deleted = true; };
+  f.store.data.applications.new = { id: 'new', guildId: config.guildId, status: 'draft' };
+  await f.service.recover();
+  assert.equal(deleted, true); assert.ok(f.store.data.applications.new);
+  assert.equal(f.store.data.applicationReset.pendingReviews.length, 0);
+});

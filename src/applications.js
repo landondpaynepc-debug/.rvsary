@@ -73,6 +73,59 @@ export class ApplicationService {
     // Interrupted role changes are rolled back by recover() before review is reopened.
   }
   reviewChannelId(app) { return app.reviewChannelId || this.config.applicationReviewChannelId; }
+  async resetAllOnce(resetId) {
+    if (this.store.data.applicationReset?.id !== resetId) {
+      const apps = Object.values(this.store.data.applications).filter(app => app.guildId === this.config.guildId);
+      const ids = new Set(apps.map(app => app.id));
+      this.store.data.applicationReset = {
+        id: resetId, at: new Date().toISOString(), cleared: apps.length, deletedReviews: 0,
+        pendingReviews: apps.filter(app => app.reviewMessageId).map(app => ({
+          applicationId: app.id, channelId: this.reviewChannelId(app), messageId: app.reviewMessageId,
+        })),
+      };
+      for (const id of ids) delete this.store.data.applications[id];
+      // Drop undelivered old application activity along with drafts and decisions.
+      this.store.data.pendingLogs = (this.store.data.pendingLogs || []).filter(item => item.kind !== 'application');
+      this.store.save();
+    }
+    await this.cleanResetReviews();
+    const reset = this.store.data.applicationReset;
+    if (!reset.announced) {
+      await this.logger.log('application', 'Applications reset', {
+        'Applications cleared': reset.cleared, 'Review messages deleted': reset.deletedReviews,
+        'Cleanup pending': reset.pendingReviews.length, Details: 'Everyone can apply again. Existing member roles were kept.',
+      });
+      reset.announced = true; this.store.save();
+    }
+    return { cleared: reset.cleared, deletedReviews: reset.deletedReviews, cleanupPending: reset.pendingReviews.length };
+  }
+  async cleanResetReviews() {
+    const reset = this.store.data.applicationReset;
+    if (!reset?.pendingReviews?.length || this.resetCleaning) return;
+    this.resetCleaning = true;
+    try {
+      for (const item of [...reset.pendingReviews]) {
+        try {
+          const channel = await this.client.channels.fetch(item.channelId);
+          if (channel) {
+            const message = await channel.messages.fetch(item.messageId);
+            if (message.author.id !== this.client.user.id
+              || !message.embeds.some(embed => embed.footer?.text === `Application ${item.applicationId}`)) {
+              throw new Error('Saved review message does not match this bot and application.');
+            }
+            await message.delete(); reset.deletedReviews++;
+          }
+        } catch (error) {
+          if (![10003, 10008].includes(error.code)) {
+            console.error('Application reset review cleanup deferred:', item.channelId, item.messageId, error.message);
+            continue;
+          }
+        }
+        reset.pendingReviews = reset.pendingReviews.filter(pending => pending !== item);
+        this.store.save();
+      }
+    } finally { this.resetCleaning = false; }
+  }
   async locked(key, fn) {
     if (this.busy.has(key)) throw new UserError('Your previous application action is still processing. Please try again in a moment.');
     this.busy.add(key);
@@ -242,6 +295,7 @@ export class ApplicationService {
     if (this.recovering) return;
     this.recovering = true;
     try {
+    await this.cleanResetReviews();
     for (const app of Object.values(this.store.data.applications)) {
       if (this.busy.has(`review:${app.id}`) || this.busy.has(`user:${app.userId}`)) continue;
       if (app.status === 'deciding') {
