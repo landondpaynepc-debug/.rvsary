@@ -74,16 +74,13 @@ test('denial sends its reason and never grants roles', async () => {
   assert.match(JSON.stringify(f.sent), /More leadership experience needed/);
 });
 
-test('review rejects unauthorized staff, self-review, wrong channels and blank reasons', async () => {
+test('review rejects unauthorized staff, wrong channels and blank reasons', async () => {
   const f = fixture();
   f.reviewer.roles.cache.clear();
-  await assert.rejects(f.service.decide(f.interaction, f.app, 'accept', 'Good'), /Only the review team/);
+  await assert.rejects(f.service.decide(f.interaction, f.app, 'accept', 'Good'), /you need reviewer role/);
   f.reviewer.permissions.add(P.Administrator);
   await assert.rejects(f.service.decide({ ...f.interaction, channelId: 'wrong' }, f.app, 'accept', 'Good'), /original application/);
   await assert.rejects(f.service.decide(f.interaction, f.app, 'accept', ' '), /decision reason/);
-  f.reviewer.id = f.app.userId;
-  f.guild.members.fetch = async () => f.reviewer;
-  await assert.rejects(f.service.decide(f.interaction, f.app, 'accept', 'Good'), /another member/);
   assert.deepEqual(f.grants, []);
 });
 
@@ -343,4 +340,40 @@ test('reset refuses to race an in-flight application action', async () => {
   const f = fixture(); f.service.busy.add(`review:${f.app.id}`);
   await assert.rejects(f.service.resetAllOnce('new-reset'), /still processing/);
   assert.ok(f.store.data.applications[f.app.id]);
+});
+
+test('authorized reviewers can accept or deny their own applications', async () => {
+  for (const decision of ['accept', 'deny']) {
+    const f = fixture();
+    f.member.permissions = new PermissionsBitField();
+    f.member.roles.cache.set(config.applicationAdditionalReviewerRoleId, {});
+    await f.service.decide({ ...f.interaction, user: f.user }, f.app, decision, 'Test review');
+    assert.equal(f.app.status, decision === 'accept' ? 'accepted' : 'denied');
+  }
+});
+
+test('review button opens with stale cached roles and the submitted decision checks fresh membership', async () => {
+  const f = fixture();
+  f.reviewer.roles.cache.clear(); f.reviewer.roles.cache.set(config.applicationAdditionalReviewerRoleId, {});
+  let modal;
+  const interaction = { ...f.interaction, isChatInputCommand: () => false, isModalSubmit: () => false,
+    customId: `rv:app:accept:${f.app.id}`, message: { id: f.app.reviewMessageId },
+    member: { roles: { cache: new Map() } }, memberPermissions: new PermissionsBitField(),
+    showModal: async value => { modal = value.toJSON(); } };
+  await f.service.handle(interaction);
+  assert.equal(modal.custom_id, `rv:app:decision:${f.app.id}:accept`);
+  assert.deepEqual(f.grants, []);
+  await f.service.handle({ ...interaction, customId: modal.custom_id, isModalSubmit: () => true,
+    fields: { getTextInputValue: () => 'Approved with current reviewer role' }, deferReply: async () => {}, editReply: async () => {} });
+  assert.equal(f.app.status, 'accepted');
+});
+
+test('a removed reviewer role cannot be bypassed by a stale modal or self-review', async () => {
+  const f = fixture(); f.reviewer.roles.cache.clear();
+  await assert.rejects(f.service.handle({ ...f.interaction, isChatInputCommand: () => false, isModalSubmit: () => true,
+    customId: `rv:app:decision:${f.app.id}:accept`, fields: { getTextInputValue: () => 'Attempt' },
+    deferReply: async () => {}, editReply: async () => {} }), /you need reviewer role/);
+  f.member.permissions = new PermissionsBitField();
+  await assert.rejects(f.service.decide({ ...f.interaction, user: f.user }, f.app, 'accept', 'Attempt'), /you need reviewer role/);
+  assert.deepEqual(f.grants, []); assert.equal(f.app.status, 'pending');
 });

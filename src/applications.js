@@ -228,7 +228,9 @@ export class ApplicationService {
   async reviewer(interaction, app) {
     if (!app || interaction.guildId !== app.guildId || interaction.channelId !== this.reviewChannelId(app)) throw new UserError('Use the original application review message.');
     const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
-    if (!canReview(member, this.config) || member.id === app.userId) throw new UserError('Only the review team or an administrator can review another member’s application.');
+    if (!canReview(member, this.config)) {
+      throw new UserError(`To accept or deny applications, you need reviewer role <@&${this.config.applicationReviewerRoleId}> or <@&${this.config.applicationAdditionalReviewerRoleId}>, or Administrator.`);
+    }
     return member;
   }
   async submit(user, app) {
@@ -372,10 +374,8 @@ export class ApplicationService {
     if (['accept', 'deny'].includes(action)) {
       if (interaction.guildId !== app.guildId || interaction.channelId !== this.reviewChannelId(app)
         || interaction.message.id !== app.reviewMessageId || app.status !== 'pending') throw new UserError('Use the pending application’s original review message.');
-      // Modal responses cannot be deferred. Revalidate membership before the submitted decision is applied.
-      const roles = interaction.member.roles.cache;
-      if (!canReview({ permissions: interaction.memberPermissions, roles: { cache: roles } }, this.config)
-        || interaction.user.id === app.userId) throw new UserError('Only authorized reviewers can review another member’s application.');
+      // Open the reason form immediately: cached interaction roles can be stale.
+      // decide() fetches current membership before any decision or role changes.
       await interaction.showModal(new ModalBuilder().setCustomId(`rv:app:decision:${id}:${action}`)
         .setTitle(`${action === 'accept' ? 'Accept' : 'Deny'} application`).addComponents(new ActionRowBuilder().addComponents(
           new TextInputBuilder().setCustomId('reason').setLabel('Reason sent to the applicant').setStyle(TextInputStyle.Paragraph).setRequired(true).setMinLength(1).setMaxLength(600),
