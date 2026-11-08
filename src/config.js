@@ -38,6 +38,7 @@ export function readConfig(env = process.env) {
     applicationLogChannelId: id('APPLICATION_LOG_CHANNEL_ID', '1492019040082985110'),
     legacyApplicationReviewChannelId: id('LEGACY_APPLICATION_REVIEW_CHANNEL_ID', '1492019111142887434'),
     applicationReviewerRoleId: id('APPLICATION_REVIEWER_ROLE_ID', '1492001472416845987'),
+    applicationAdditionalReviewerRoleId: id('APPLICATION_ADDITIONAL_REVIEWER_ROLE_ID', '1494522719851643020'),
     supportApplicationRoleId: id('SUPPORT_APPLICATION_ROLE_ID', '1491994140819324988'),
     managementApplicationRoleId: id('MANAGEMENT_APPLICATION_ROLE_ID', '1492001472416845987'),
     designRoleId: id('DESIGN_ROLE_ID', '1507979010053771354'),

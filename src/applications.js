@@ -31,6 +31,8 @@ export const QUESTIONS = {
 export const applicationCommand = () => new SlashCommandBuilder().setName('apply').setDescription('Start or resume an application in your DMs.')
   .setDMPermission(false).addStringOption(o => o.setName('team').setDescription('Team to apply for').setRequired(true)
     .addChoices(...Object.entries(TRACKS).map(([value, name]) => ({ name, value }))));
+export const applicationResetCommand = () => new SlashCommandBuilder().setName('reset-applications')
+  .setDescription('Reset all applications after confirmation. Restricted to authorized staff.').setDMPermission(false);
 
 export function acceptedRoles(app, config) {
   if (app.track === 'support') return [...new Set([config.supportRoleId, config.supportApplicationRoleId])];
@@ -41,7 +43,10 @@ export function acceptedRoles(app, config) {
   }
   return [...new Set([config.designRoleId, ...app.specialties.map(value => ids[value])])];
 }
-export const canReview = (member, config) => member.permissions.has(P.Administrator) || member.roles.cache.has(config.applicationReviewerRoleId);
+export const canReview = (member, config) => member.permissions.has(P.Administrator)
+  || [config.applicationReviewerRoleId, config.applicationAdditionalReviewerRoleId].some(id => id && member.roles.cache.has(id));
+export const canResetApplications = (member, config) => member.permissions.has(P.Administrator)
+  || Boolean(config.applicationAdditionalReviewerRoleId && member.roles.cache.has(config.applicationAdditionalReviewerRoleId));
 
 export function reviewPayload(app) {
   const pending = app.status === 'pending' || app.status === 'submitting';
@@ -61,6 +66,7 @@ export class ApplicationService {
   constructor(client, config, store, logger) {
     Object.assign(this, { client, config, store, logger });
     this.busy = new Set();
+    this.resetConfirmations = new Map();
     store.data.applications ??= {};
     // Preserve existing review links when the destination changes.
     let migrated = false;
@@ -73,19 +79,41 @@ export class ApplicationService {
     // Interrupted role changes are rolled back by recover() before review is reopened.
   }
   reviewChannelId(app) { return app.reviewChannelId || this.config.applicationReviewChannelId; }
-  async resetAllOnce(resetId) {
-    if (this.store.data.applicationReset?.id !== resetId) {
+  async ensureReviewerAccess(guild) {
+    const role = await guild.roles.fetch(this.config.applicationAdditionalReviewerRoleId);
+    const channel = await guild.channels.fetch(this.config.applicationReviewChannelId);
+    if (!role || !channel?.permissionOverwrites) throw new UserError('The additional reviewer role or application channel is unavailable.');
+    if (!channel.permissionsFor(role)?.has([P.ViewChannel, P.ReadMessageHistory, P.UseApplicationCommands])) {
+      await channel.permissionOverwrites.edit(role.id, { ViewChannel: true, ReadMessageHistory: true, UseApplicationCommands: true },
+        { reason: 'Owner authorized this role to review and reset applications' });
+    }
+  }
+  async resetAllOnce(resetId, actor = 'Owner-requested startup reset') {
+    if (this.resetting || this.busy.size || this.recovering || this.resetCleaning) {
+      throw new UserError('An application action is still processing. Please try the reset again in a moment.');
+    }
+    this.resetting = true;
+    try { return await this.performReset(resetId, actor); }
+    finally { this.resetting = false; }
+  }
+  async performReset(resetId, actor) {
+    const completed = this.store.data.completedApplicationResets ??= {};
+    const previous = this.store.data.applicationReset;
+    if (previous) completed[previous.id] = true;
+    if (!completed[resetId]) {
       const apps = Object.values(this.store.data.applications).filter(app => app.guildId === this.config.guildId);
       const ids = new Set(apps.map(app => app.id));
+      const pendingReviews = [...(previous?.pendingReviews || []), ...apps.filter(app => app.reviewMessageId).map(app => ({
+        applicationId: app.id, channelId: this.reviewChannelId(app), messageId: app.reviewMessageId,
+      }))];
       this.store.data.applicationReset = {
-        id: resetId, at: new Date().toISOString(), cleared: apps.length, deletedReviews: 0,
-        pendingReviews: apps.filter(app => app.reviewMessageId).map(app => ({
-          applicationId: app.id, channelId: this.reviewChannelId(app), messageId: app.reviewMessageId,
-        })),
+        id: resetId, actor, at: new Date().toISOString(), cleared: apps.length, deletedReviews: 0,
+        pendingReviews: [...new Map(pendingReviews.map(item => [`${item.channelId}:${item.messageId}`, item])).values()],
       };
       for (const id of ids) delete this.store.data.applications[id];
       // Drop undelivered old application activity along with drafts and decisions.
       this.store.data.pendingLogs = (this.store.data.pendingLogs || []).filter(item => item.kind !== 'application');
+      completed[resetId] = true;
       this.store.save();
     }
     await this.cleanResetReviews();
@@ -93,7 +121,8 @@ export class ApplicationService {
     if (!reset.announced) {
       await this.logger.log('application', 'Applications reset', {
         'Applications cleared': reset.cleared, 'Review messages deleted': reset.deletedReviews,
-        'Cleanup pending': reset.pendingReviews.length, Details: 'Everyone can apply again. Existing member roles were kept.',
+        'Cleanup pending': reset.pendingReviews.length, 'Requested by': reset.actor || actor,
+        Details: 'Everyone can apply again. Existing member roles were kept.',
       });
       reset.announced = true; this.store.save();
     }
@@ -127,6 +156,7 @@ export class ApplicationService {
     } finally { this.resetCleaning = false; }
   }
   async locked(key, fn) {
+    if (this.resetting) throw new UserError('Applications are being reset. Please try again in a moment.');
     if (this.busy.has(key)) throw new UserError('Your previous application action is still processing. Please try again in a moment.');
     this.busy.add(key);
     try { return await fn(); } finally { this.busy.delete(key); }
@@ -292,7 +322,7 @@ export class ApplicationService {
     } catch (error) { console.error('Application review display update deferred:', app.id, error.message); }
   }
   async recover() {
-    if (this.recovering) return;
+    if (this.recovering || this.resetting) return;
     this.recovering = true;
     try {
     await this.cleanResetReviews();
@@ -327,6 +357,8 @@ export class ApplicationService {
     } finally { this.recovering = false; }
   }
   async handle(interaction) {
+    if ((interaction.isChatInputCommand() && interaction.commandName === 'reset-applications')
+      || interaction.customId?.startsWith('rv:app-reset:')) return this.handleReset(interaction);
     if (interaction.isChatInputCommand() && interaction.commandName === 'apply' || interaction.customId === 'rv:apply') {
       if (interaction.guildId !== this.config.guildId) throw new UserError('Apply from the .revisonary server.');
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -342,7 +374,8 @@ export class ApplicationService {
         || interaction.message.id !== app.reviewMessageId || app.status !== 'pending') throw new UserError('Use the pending application’s original review message.');
       // Modal responses cannot be deferred. Revalidate membership before the submitted decision is applied.
       const roles = interaction.member.roles.cache;
-      if ((!interaction.memberPermissions.has(P.Administrator) && !roles.has(this.config.applicationReviewerRoleId)) || interaction.user.id === app.userId) throw new UserError('Only authorized reviewers can review another member’s application.');
+      if (!canReview({ permissions: interaction.memberPermissions, roles: { cache: roles } }, this.config)
+        || interaction.user.id === app.userId) throw new UserError('Only authorized reviewers can review another member’s application.');
       await interaction.showModal(new ModalBuilder().setCustomId(`rv:app:decision:${id}:${action}`)
         .setTitle(`${action === 'accept' ? 'Accept' : 'Deny'} application`).addComponents(new ActionRowBuilder().addComponents(
           new TextInputBuilder().setCustomId('reason').setLabel('Reason sent to the applicant').setStyle(TextInputStyle.Paragraph).setRequired(true).setMinLength(1).setMaxLength(600),
@@ -369,6 +402,41 @@ export class ApplicationService {
         await this.logger.log('application', 'Application cancelled', { Applicant: app.userId, Application: app.id });
       } else throw new UserError('Unknown application action.');
     });
+    return true;
+  }
+  async handleReset(interaction) {
+    if (interaction.guildId !== this.config.guildId) throw new UserError('Use this command in the .revisonary server.');
+    const command = interaction.isChatInputCommand();
+    if (command) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    else await interaction.deferUpdate();
+    const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true });
+    if (!canResetApplications(member, this.config)) throw new UserError('Only the authorized reset role or an administrator can reset applications.');
+    if (command) {
+      for (const [id, pending] of this.resetConfirmations) if (pending.expires < Date.now()) this.resetConfirmations.delete(id);
+      const nonce = randomBytes(8).toString('hex');
+      this.resetConfirmations.set(interaction.user.id, { nonce, expires: Date.now() + 5 * 60_000 });
+      await interaction.editReply({
+        content: 'Reset all saved application drafts, pending submissions and decisions, and delete their review messages? Everyone will be able to apply again. Existing member roles will be kept. This cannot be undone.',
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`rv:app-reset:confirm:${interaction.user.id}:${nonce}`).setLabel('Reset All Applications').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(`rv:app-reset:cancel:${interaction.user.id}:${nonce}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary),
+        )],
+      });
+      return true;
+    }
+    const [, , action, userId, nonce] = interaction.customId.split(':');
+    const pending = this.resetConfirmations.get(userId);
+    if (userId !== interaction.user.id || !pending || pending.nonce !== nonce || pending.expires < Date.now()) {
+      throw new UserError('This reset confirmation expired or belongs to someone else. Run /reset-applications again.');
+    }
+    if (action === 'cancel') {
+      this.resetConfirmations.delete(userId);
+      await interaction.editReply({ content: 'Reset cancelled. Applications were kept.', components: [] }); return true;
+    }
+    if (action !== 'confirm') throw new UserError('Unknown reset action.');
+    const result = await this.resetAllOnce(`manual:${interaction.id}`, userId);
+    this.resetConfirmations.delete(userId);
+    await interaction.editReply({ content: `Reset complete: ${result.cleared} application(s) cleared. Everyone can apply again.${result.cleanupPending ? ` ${result.cleanupPending} review message(s) are waiting for cleanup.` : ''}`, components: [] });
     return true;
   }
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ChannelType, PermissionsBitField, PermissionFlagsBits as P } from 'discord.js';
 import { readConfig } from '../src/config.js';
-import { ApplicationService, acceptedRoles, applicationCommand, QUESTIONS, reviewPayload } from '../src/applications.js';
+import { ApplicationService, acceptedRoles, applicationCommand, applicationResetCommand, QUESTIONS, reviewPayload } from '../src/applications.js';
 import { checkHierarchy, moderationCommands, ModerationService, selectClearMessages } from '../src/moderation.js';
 import { Logger } from '../src/logging.js';
 import { panelPayload, ticketPayload } from '../src/panels.js';
@@ -35,8 +35,8 @@ function fixture(track = 'support') {
 }
 
 test('new slash commands and careers/support payloads serialize successfully', () => {
-  const commands = [...moderationCommands(), applicationCommand()].map(c => c.toJSON());
-  assert.deepEqual(commands.map(c => c.name), ['warn', 'warnings', 'timeout', 'untimeout', 'kick', 'ban', 'unban', 'clear', 'say', 'lock', 'unlock', 'slowmode', 'apply']);
+  const commands = [...moderationCommands(), applicationCommand(), applicationResetCommand()].map(c => c.toJSON());
+  assert.deepEqual(commands.map(c => c.name), ['warn', 'warnings', 'timeout', 'untimeout', 'kick', 'ban', 'unban', 'clear', 'say', 'lock', 'unlock', 'slowmode', 'apply', 'reset-applications']);
   for (const c of commands) {
     let optional = false;
     for (const option of c.options || []) { if (!option.required) optional = true; else assert.equal(optional, false, `${c.name}: required options first`); }
@@ -293,4 +293,54 @@ test('application reset retries failed review cleanup without resetting later ap
   await f.service.recover();
   assert.equal(deleted, true); assert.ok(f.store.data.applications.new);
   assert.equal(f.store.data.applicationReset.pendingReviews.length, 0);
+});
+
+test('the additional reviewer role can accept and deny without Administrator', async () => {
+  for (const decision of ['accept', 'deny']) {
+    const f = fixture(); f.reviewer.roles.cache.clear();
+    f.reviewer.roles.cache.set('1494522719851643020', {});
+    await f.service.decide(f.interaction, f.app, decision, 'Reviewed by authorized staff');
+    assert.equal(f.app.status, decision === 'accept' ? 'accepted' : 'denied');
+  }
+});
+
+function resetInteraction(f) {
+  let payload;
+  return { ...f.interaction, id: 'reset-command', commandName: 'reset-applications',
+    isChatInputCommand: () => true, deferReply: async () => {}, deferUpdate: async () => {},
+    editReply: async value => { payload = value; }, payload: () => payload };
+}
+
+test('reset permission requires the new role and confirmation rechecks current membership', async () => {
+  const f = fixture(); const interaction = resetInteraction(f);
+  await assert.rejects(f.service.handle(interaction), /authorized reset role/);
+  f.reviewer.roles.cache.set(config.applicationAdditionalReviewerRoleId, {});
+  await f.service.handle(interaction);
+  assert.ok(f.store.data.applications[f.app.id]);
+  const customId = interaction.payload().components[0].toJSON().components[0].custom_id;
+  f.reviewer.roles.cache.delete(config.applicationAdditionalReviewerRoleId);
+  await assert.rejects(f.service.handle({ ...interaction, isChatInputCommand: () => false, customId }), /authorized reset role/);
+  assert.ok(f.store.data.applications[f.app.id]);
+});
+
+test('confirmed manual reset clears applications once and startup cannot repeat it', async () => {
+  const f = fixture(); delete f.app.reviewMessageId;
+  await f.service.resetAllOnce('startup-reset');
+  f.store.data.applications[f.app.id] = f.app;
+  f.reviewer.roles.cache.set(config.applicationAdditionalReviewerRoleId, {});
+  const interaction = resetInteraction(f);
+  await f.service.handle(interaction);
+  const customId = interaction.payload().components[0].toJSON().components[0].custom_id;
+  await f.service.handle({ ...interaction, id: 'confirmation', isChatInputCommand: () => false, customId });
+  assert.deepEqual(f.store.data.applications, {});
+  f.store.data.applications.new = { id: 'new', guildId: config.guildId, status: 'draft' };
+  const restarted = new ApplicationService(f.client, config, f.store, f.logger);
+  await restarted.resetAllOnce('startup-reset');
+  assert.ok(f.store.data.applications.new);
+});
+
+test('reset refuses to race an in-flight application action', async () => {
+  const f = fixture(); f.service.busy.add(`review:${f.app.id}`);
+  await assert.rejects(f.service.resetAllOnce('new-reset'), /still processing/);
+  assert.ok(f.store.data.applications[f.app.id]);
 });

@@ -10,7 +10,7 @@ import { TicketService, UserError } from './tickets.js';
 import { VerificationService } from './verification.js';
 import { Logger, registerEventLogs } from './logging.js';
 import { MOD_PERMISSIONS, ModerationService, moderationCommands } from './moderation.js';
-import { ApplicationService, applicationCommand } from './applications.js';
+import { ApplicationService, applicationCommand, applicationResetCommand } from './applications.js';
 
 const config = readConfig();
 if (!config.messageContentEnabled && process.env.ENABLE_MESSAGE_CONTENT !== 'false') {
@@ -79,11 +79,15 @@ client.once(Events.ClientReady, async () => {
     if (config.guildId && config.guildId !== verificationChannel.guildId) throw new Error('GUILD_ID does not match the verification channel server.');
     config.guildId = verificationChannel.guildId;
     const guild = await client.guilds.fetch(config.guildId);
+    try {
+      await applications.ensureReviewerAccess(guild);
+      console.log(`Application reviewer access ready: ${config.applicationAdditionalReviewerRoleId}`);
+    } catch (error) { console.error('Application reviewer channel access failed:', error.message); }
     // Explicit user-requested reset; the persistent marker makes this run once only.
-    const applicationReset = await applications.resetAllOnce('2026-11-07-request-1');
+    const applicationReset = await applications.resetAllOnce('2026-11-08-request-1');
     console.log(`Application reset status: ${JSON.stringify(applicationReset)}`);
     // Upsert our commands without removing any unrelated application commands.
-    for (const command of [setup, applicationCommand(), ...moderationCommands()]) await guild.commands.create(command.toJSON());
+    for (const command of [setup, applicationCommand(), applicationResetCommand(), ...moderationCommands()]) await guild.commands.create(command.toJSON());
     ready = true;
     console.log(`Connected as ${client.user.tag}. Run /setup in your server to publish the panels.`);
     console.log(`Message content logging: ${config.messageContentEnabled ? 'enabled' : 'metadata only; enable Message Content Intent and restart for content'}.`);
@@ -131,7 +135,7 @@ client.on(Events.GuildMemberAdd, async member => {
 });
 
 client.on(Events.InteractionCreate, async interaction => {
-  const ours = (interaction.isChatInputCommand() && ['setup', 'apply', ...Object.keys(MOD_PERMISSIONS)].includes(interaction.commandName))
+  const ours = (interaction.isChatInputCommand() && ['setup', 'apply', 'reset-applications', ...Object.keys(MOD_PERMISSIONS)].includes(interaction.commandName))
     || ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) && interaction.customId.startsWith('rv:'));
   if (!ours) return;
   try {
@@ -242,7 +246,7 @@ client.on(Events.InteractionCreate, async interaction => {
     }
   } catch (error) {
     console.error('Interaction failed:', error.name, error.code ?? '', error.message);
-    const logKind = interaction.commandName === 'apply' || interaction.customId?.startsWith('rv:app') ? 'application'
+    const logKind = ['apply', 'reset-applications'].includes(interaction.commandName) || interaction.customId?.startsWith('rv:app') ? 'application'
       : interaction.isChatInputCommand() && Object.hasOwn(MOD_PERMISSIONS, interaction.commandName) ? 'mod' : 'event';
     try { await logger.log(logKind, 'Bot action failed', {
       Member: interaction.user.id, Action: interaction.commandName || interaction.customId, Error: error.message,
